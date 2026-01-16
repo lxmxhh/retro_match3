@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__unityMCP__read_console",
+      "mcp__unityMCP__refresh_unity",
+      "mcp__unityMCP__manage_components",
+      "mcp__unityMCP__find_gameobjects",
+      "mcp__unityMCP__manage_editor",
+      "Bash(timeout /t 3 /nobreak)",
+      "mcp__unityMCP__manage_gameobject",
+      "mcp__unityMCP__manage_asset",
+      "Bash(dir:*)",
+      "mcp__unityMCP__manage_scene",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 3\")",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 2\")",
+      "Bash(powershell -Command \"Test-Path ''D:\\\\workspace\\\\unity\\\\retro_match2d\\\\Assets\\\\Screenshots\\\\centered_gems_test.png''\")",
+      "mcp__unityMCP__execute_menu_item",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 1\")"
+    ]
+  }
+}
