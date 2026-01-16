@@ -88,7 +88,7 @@ Retro Match 2D 是一款经典的消除类益智游戏，玩家通过交换相�
 
 1. 克隆仓库
 ```bash
-git clone https://github.com/你的用户名/retro_match2d.git
+git clone https://github.com/lxmxhh/retro_match3.git
 ```
 
 2. 使用Unity Hub打开项目
