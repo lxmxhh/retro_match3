@@ -24,12 +24,15 @@ namespace RetroMatch2D.Managers
 
         // 事件声明
         public event System.Action<List<List<Gem>>> OnMatchFound;
+        public event System.Action<List<MatchData>> OnMatchFoundEnhanced; // 新增：增强匹配事件
         public event System.Action<int> OnScoreEarned;
         public event System.Action OnNoMatches;
 
         private int currentScore = 0;
+        private List<MatchData> lastMatchResults = new List<MatchData>(); // 缓存最近的匹配结果
 
         public int CurrentScore => currentScore;
+        public List<MatchData> LastMatchResults => lastMatchResults;
 
         private void Start()
         {
@@ -40,7 +43,7 @@ namespace RetroMatch2D.Managers
         }
 
         /// <summary>
-        /// 检查并处理棋盘上的所有匹配
+        /// 检查并处理棋盘上的所有匹配（使用增强匹配系统）
         /// </summary>
         /// <returns>是否找到了匹配</returns>
         public bool CheckAndHandleMatches()
@@ -50,29 +53,39 @@ namespace RetroMatch2D.Managers
                 return false;
             }
 
-            var matches = MatchDetector.FindMatches(board);
+            // 使用增强匹配系统
+            var enhancedMatches = MatchDetector.FindMatchesEnhanced(board);
 
-            if (matches.Count == 0)
+            if (enhancedMatches.Count == 0)
             {
                 OnNoMatches?.Invoke();
+                lastMatchResults.Clear();
                 return false;
             }
 
-            // 触发匹配找到事件
-            OnMatchFound?.Invoke(matches);
+            // 缓存匹配结果
+            lastMatchResults = enhancedMatches;
 
-            // 计算分数
-            int earnedScore = CalculateScore(matches);
+            // 触发增强匹配事件
+            OnMatchFoundEnhanced?.Invoke(enhancedMatches);
+
+            // 为了向后兼容，转换并触发旧事件
+            var legacyMatches = ConvertToLegacyFormat(enhancedMatches);
+            OnMatchFound?.Invoke(legacyMatches);
+
+            // 计算分数（使用增强计算）
+            int earnedScore = CalculateScoreEnhanced(enhancedMatches);
             currentScore += earnedScore;
             OnScoreEarned?.Invoke(earnedScore);
 
-            Debug.Log($"MatchManager: Found {matches.Count} match groups, earned {earnedScore} score");
+            Debug.Log($"MatchManager Enhanced: Found {enhancedMatches.Count} match groups, earned {earnedScore} score");
+            MatchDetector.DebugPrintMatchesEnhanced(enhancedMatches);
 
             return true;
         }
 
         /// <summary>
-        /// 计算匹配带来的分数
+        /// 计算匹配带来的分数（旧版本，保留兼容性）
         /// </summary>
         /// <param name="matches">匹配组列表</param>
         /// <returns>总分数</returns>
@@ -101,17 +114,88 @@ namespace RetroMatch2D.Managers
         }
 
         /// <summary>
-        /// 获取所有匹配的宝石
+        /// 计算增强匹配带来的分数（考虑匹配类型优先级）
+        /// </summary>
+        /// <param name="matches">增强匹配数据列表</param>
+        /// <returns>总分数</returns>
+        private int CalculateScoreEnhanced(List<MatchData> matches)
+        {
+            int score = 0;
+
+            foreach (var match in matches)
+            {
+                // 基础分数：每个宝石baseScorePerGem分
+                int matchScore = match.Gems.Count * baseScorePerGem;
+
+                // 奖励分数：超过3个宝石的部分，每个多bonus分
+                if (match.Gems.Count > 3)
+                {
+                    int extraGems = match.Gems.Count - 3;
+                    matchScore += extraGems * bonusScorePerExtraGem;
+                }
+
+                // 特殊形状额外加分
+                int shapeBonus = GetShapeBonus(match.Type);
+                matchScore += shapeBonus;
+
+                score += matchScore;
+
+                Debug.Log($"Enhanced Match score: Type={match.Type}, Gems={match.Gems.Count}, " +
+                         $"BaseScore={match.Gems.Count * baseScorePerGem}, ShapeBonus={shapeBonus}, Total={matchScore}");
+            }
+
+            return score;
+        }
+
+        /// <summary>
+        /// 根据匹配类型获取额外分数
+        /// </summary>
+        private int GetShapeBonus(MatchType matchType)
+        {
+            switch (matchType)
+            {
+                case MatchType.Cross:
+                    return 500; // 十字型最高奖励
+                case MatchType.TShape:
+                    return 300; // T型高奖励
+                case MatchType.LShape:
+                    return 200; // L型中等奖励
+                case MatchType.Horizontal5:
+                case MatchType.Vertical5:
+                    return 150; // 5连奖励
+                case MatchType.Horizontal4:
+                case MatchType.Vertical4:
+                    return 100; // 4连奖励
+                default:
+                    return 0; // 普通3连无额外奖励
+            }
+        }
+
+        /// <summary>
+        /// 将增强匹配数据转换为旧格式（向后兼容）
+        /// </summary>
+        private List<List<Gem>> ConvertToLegacyFormat(List<MatchData> enhancedMatches)
+        {
+            var legacyMatches = new List<List<Gem>>();
+            foreach (var match in enhancedMatches)
+            {
+                legacyMatches.Add(match.Gems);
+            }
+            return legacyMatches;
+        }
+
+        /// <summary>
+        /// 获取所有匹配的宝石（使用增强匹配系统）
         /// </summary>
         /// <returns>所有被匹配的宝石列表</returns>
         public List<Gem> GetAllMatchedGems()
         {
-            var matches = MatchDetector.FindMatches(board);
+            var enhancedMatches = MatchDetector.FindMatchesEnhanced(board);
             var matchedGems = new List<Gem>();
 
-            foreach (var match in matches)
+            foreach (var match in enhancedMatches)
             {
-                matchedGems.AddRange(match);
+                matchedGems.AddRange(match.Gems);
             }
 
             return matchedGems;
@@ -191,28 +275,39 @@ namespace RetroMatch2D.Managers
         }
 
         /// <summary>
-        /// 获取特定宝石的匹配信息
+        /// 获取特定宝石的匹配信息（增强版本）
         /// </summary>
         /// <param name="gem">宝石对象</param>
-        /// <returns>该宝石所在的匹配组，如果没有匹配返回null</returns>
-        public List<Gem> GetMatchForGem(Gem gem)
+        /// <returns>该宝石所在的匹配数据，如果没有匹配返回null</returns>
+        public MatchData GetMatchDataForGem(Gem gem)
         {
             if (gem == null || board == null)
             {
                 return null;
             }
 
-            var matches = MatchDetector.FindMatches(board);
+            var enhancedMatches = MatchDetector.FindMatchesEnhanced(board);
 
-            foreach (var match in matches)
+            foreach (var match in enhancedMatches)
             {
-                if (match.Contains(gem))
+                if (match.Gems.Contains(gem))
                 {
                     return match;
                 }
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// 获取特定宝石的匹配信息（旧版本，保留兼容性）
+        /// </summary>
+        /// <param name="gem">宝石对象</param>
+        /// <returns>该宝石所在的匹配组，如果没有匹配返回null</returns>
+        public List<Gem> GetMatchForGem(Gem gem)
+        {
+            var matchData = GetMatchDataForGem(gem);
+            return matchData?.Gems;
         }
 
         /// <summary>
@@ -226,12 +321,12 @@ namespace RetroMatch2D.Managers
         }
 
         /// <summary>
-        /// 调试：打印当前所有匹配
+        /// 调试：打印当前所有匹配（增强版本）
         /// </summary>
         public void DebugPrintMatches()
         {
-            var matches = MatchDetector.FindMatches(board);
-            MatchDetector.DebugPrintMatches(matches);
+            var enhancedMatches = MatchDetector.FindMatchesEnhanced(board);
+            MatchDetector.DebugPrintMatchesEnhanced(enhancedMatches);
         }
     }
 }

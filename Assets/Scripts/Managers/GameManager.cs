@@ -235,6 +235,9 @@ namespace RetroMatch2D.Managers
         {
             Debug.Log("GameManager: 初始化游戏...");
 
+            // 初始化对象池
+            InitializeGemPool();
+
             // 重置游戏状态
             _currentState = GameState.Idle;
             _isGameRunning = false;
@@ -253,7 +256,29 @@ namespace RetroMatch2D.Managers
 
             Debug.Log("GameManager: 游戏初始化完成! 等待玩家输入...");
         }
-        
+
+        /// <summary>
+        /// 初始化宝石对象池
+        /// </summary>
+        private void InitializeGemPool()
+        {
+            // 准备Sprite字典
+            var spriteDict = new Dictionary<GemType, Sprite>
+            {
+                { GemType.Red, _redGemSprite },
+                { GemType.Blue, _blueGemSprite },
+                { GemType.Green, _greenGemSprite },
+                { GemType.Yellow, _yellowGemSprite },
+                { GemType.Purple, _purpleGemSprite },
+                { GemType.Orange, _orangeGemSprite }
+            };
+
+            // 初始化对象池
+            GemPool.Instance.Initialize(spriteDict);
+
+            Debug.Log("GameManager: 对象池初始化完成");
+        }
+
         #endregion
         
         #region Game Loop
@@ -444,7 +469,7 @@ namespace RetroMatch2D.Managers
         }
         
         /// <summary>
-        /// 在指定位置生成宝石
+        /// 在指定位置生成宝石（使用对象池）
         /// </summary>
         /// <param name="x">X坐标（列）</param>
         /// <param name="y">Y坐标（行）</param>
@@ -457,37 +482,18 @@ namespace RetroMatch2D.Managers
                 Debug.LogWarning($"GameManager: 无效的棋盘位置 ({x}, {y})!");
                 return;
             }
-            
-            // 创建新宝石GameObject
-            GameObject gemObj = new GameObject($"Gem_{type}_{x}_{y}");
-            gemObj.transform.SetParent(_gemGrid.transform);
 
-            // 添加必要的组件
-            SpriteRenderer spriteRenderer = gemObj.AddComponent<SpriteRenderer>();
-            Gem newGem = gemObj.AddComponent<Gem>();
-
-            // 获取并设置Sprite
-            Sprite gemSprite = GetSpriteForGemType(type);
-            if (gemSprite != null)
-            {
-                spriteRenderer.sprite = gemSprite;
-            }
-            else
-            {
-                Debug.LogWarning($"GameManager: 宝石类型 {type} 的Sprite未配置，将使用纯色显示");
-            }
-
-            // 初始化宝石
-            newGem.Initialize(type, x, y);
+            // 从对象池获取宝石
+            Gem newGem = GemPool.Instance.GetGem(type, x, y, _gemGrid.transform);
 
             // 设置世界位置
             Vector3 worldPos = _gemGrid.GridToWorldPosition(x, y);
-            gemObj.transform.position = worldPos;
+            newGem.transform.position = worldPos;
 
             // 将宝石添加到棋盘
             _board.SetGem(x, y, newGem);
 
-            Debug.Log($"GameManager: 在 ({x}, {y}) 生成了 {type} 类型的宝石");
+            Debug.Log($"GameManager: 在 ({x}, {y}) 生成了 {type} 类型的宝石 (使用对象池)");
         }
         
         /// <summary>

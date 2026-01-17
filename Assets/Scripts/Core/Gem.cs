@@ -26,6 +26,9 @@ namespace RetroMatch2D.Core
         /// <summary>是否正在销毁</summary>
         private bool isDestroying = false;
 
+        /// <summary>是否为池化对象</summary>
+        private bool isPooled = false;
+
         /// <summary>动画类型枚举</summary>
         public enum AnimationType
         {
@@ -180,8 +183,50 @@ namespace RetroMatch2D.Core
                 yield return null;
             }
 
-            Destroy(gameObject);
+            // 如果是池化对象，归还到对象池
+            // 否则直接销毁
+            if (isPooled)
+            {
+                ReturnToPool();
+            }
+            else
+            {
+                Destroy(gameObject);
+            }
         }
+
+        /// <summary>
+        /// 归还到对象池
+        /// </summary>
+        private void ReturnToPool()
+        {
+            isDestroying = false;
+
+            // 使用GemPool归还
+            var pool = RetroMatch2D.Managers.GemPool.Instance;
+            if (pool != null)
+            {
+                pool.ReturnGem(this);
+            }
+            else
+            {
+                Debug.LogWarning("Gem: 无法找到GemPool实例，直接销毁");
+                Destroy(gameObject);
+            }
+        }
+
+        /// <summary>
+        /// 设置是否为池化对象
+        /// </summary>
+        public void SetPooled(bool pooled)
+        {
+            isPooled = pooled;
+        }
+
+        /// <summary>
+        /// 获取是否为池化对象
+        /// </summary>
+        public bool IsPooled => isPooled;
 
         /// <summary>
         /// 获取宝石类型
