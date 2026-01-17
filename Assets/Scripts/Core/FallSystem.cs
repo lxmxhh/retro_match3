@@ -92,8 +92,8 @@ namespace RetroMatch2D.Core
                         // 计算目标世界坐标
                         Vector3 targetPos = gemGrid.GridToWorldPosition(col, targetRow);
 
-                        // 播放下落动画
-                        gem.MoveTo(targetPos, fallDuration);
+                        // 播放下落动画（带弹跳效果）
+                        gem.MoveTo(targetPos, fallDuration, Gem.AnimationType.EaseOutBounce);
 
                         hasMovement = true;
 

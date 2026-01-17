@@ -26,6 +26,16 @@ namespace RetroMatch2D.Core
         /// <summary>是否正在销毁</summary>
         private bool isDestroying = false;
 
+        /// <summary>动画类型枚举</summary>
+        public enum AnimationType
+        {
+            Linear,          // 线性
+            EaseOutCubic,   // 三次方缓出
+            EaseOutElastic, // 弹性缓出（适合交换）
+            EaseOutBounce,  // 弹跳缓出（适合下落）
+            EaseInOutBack   // 回退缓出（适合特殊效果）
+        }
+
         private void Awake()
         {
             spriteRenderer = GetComponent<SpriteRenderer>();
@@ -81,20 +91,21 @@ namespace RetroMatch2D.Core
         /// </summary>
         /// <param name="targetPos">目标世界坐标</param>
         /// <param name="duration">移动时间（秒）</param>
-        public void MoveTo(Vector3 targetPos, float duration)
+        /// <param name="animType">动画类型</param>
+        public void MoveTo(Vector3 targetPos, float duration, AnimationType animType = AnimationType.EaseOutCubic)
         {
             if (isMoving)
             {
-                StopCoroutine(MoveCoroutine(targetPos, duration));
+                StopAllCoroutines();
             }
-            
-            StartCoroutine(MoveCoroutine(targetPos, duration));
+
+            StartCoroutine(MoveCoroutine(targetPos, duration, animType));
         }
 
         /// <summary>
         /// 移动协程
         /// </summary>
-        private IEnumerator MoveCoroutine(Vector3 targetPos, float duration)
+        private IEnumerator MoveCoroutine(Vector3 targetPos, float duration, AnimationType animType)
         {
             isMoving = true;
             Vector3 startPos = transform.position;
@@ -104,10 +115,11 @@ namespace RetroMatch2D.Core
             {
                 elapsed += Time.deltaTime;
                 float progress = Mathf.Clamp01(elapsed / duration);
-                
-                // 使用平滑缓动
-                transform.position = Vector3.Lerp(startPos, targetPos, EaseOutCubic(progress));
-                
+
+                // 根据动画类型应用不同的缓动函数
+                float easedProgress = ApplyEasing(progress, animType);
+                transform.position = Vector3.Lerp(startPos, targetPos, easedProgress);
+
                 yield return null;
             }
 
@@ -116,38 +128,55 @@ namespace RetroMatch2D.Core
         }
 
         /// <summary>
-        /// 带动画的销毁 - 淡出效果
+        /// 带动画的销毁 - 增强版（缩放 + 旋转 + 淡出）
         /// </summary>
-        public void DestroyWithAnimation()
+        /// <param name="useParticles">是否使用粒子效果（可选）</param>
+        public void DestroyWithAnimation(bool useParticles = false)
         {
             if (isDestroying)
                 return;
 
-            StartCoroutine(DestroyCoroutine());
+            StartCoroutine(EnhancedDestroyCoroutine(useParticles));
         }
 
         /// <summary>
-        /// 销毁协程 - 淡出效果
+        /// 增强版销毁协程 - 缩放 + 旋转 + 淡出效果
         /// </summary>
-        private IEnumerator DestroyCoroutine()
+        private IEnumerator EnhancedDestroyCoroutine(bool useParticles)
         {
             isDestroying = true;
-            float duration = 0.3f;
+            float duration = 0.4f;
             float elapsed = 0f;
             Color originalColor = spriteRenderer.color;
+            Vector3 originalScale = transform.localScale;
+            Quaternion originalRotation = transform.rotation;
+
+            // TODO: 后续添加粒子效果
+            // if (useParticles)
+            // {
+            //     PlayParticleEffect();
+            // }
 
             while (elapsed < duration)
             {
                 elapsed += Time.deltaTime;
                 float progress = elapsed / duration;
-                
+
+                // 淡出效果
                 Color newColor = originalColor;
                 newColor.a = Mathf.Lerp(1f, 0f, progress);
                 spriteRenderer.color = newColor;
-                
-                // 缩放效果
-                transform.localScale = Vector3.Lerp(Vector3.one, Vector3.one * 0.5f, progress);
-                
+
+                // 缩放效果 - 先放大一点，然后缩小（punch效果）
+                float scaleProgress = progress < 0.2f ?
+                    Mathf.Lerp(1f, 1.2f, progress / 0.2f) :
+                    Mathf.Lerp(1.2f, 0f, (progress - 0.2f) / 0.8f);
+                transform.localScale = originalScale * scaleProgress;
+
+                // 旋转效果 - 360度旋转
+                float rotationAngle = Mathf.Lerp(0f, 360f, EaseOutCubic(progress));
+                transform.rotation = originalRotation * Quaternion.Euler(0f, 0f, rotationAngle);
+
                 yield return null;
             }
 
@@ -237,12 +266,93 @@ namespace RetroMatch2D.Core
         }
 
         /// <summary>
-        /// 三次方缓动函数（Out）- 动画曲线
+        /// 应用缓动函数
+        /// </summary>
+        private float ApplyEasing(float t, AnimationType animType)
+        {
+            switch (animType)
+            {
+                case AnimationType.Linear:
+                    return t;
+                case AnimationType.EaseOutCubic:
+                    return EaseOutCubic(t);
+                case AnimationType.EaseOutElastic:
+                    return EaseOutElastic(t);
+                case AnimationType.EaseOutBounce:
+                    return EaseOutBounce(t);
+                case AnimationType.EaseInOutBack:
+                    return EaseInOutBack(t);
+                default:
+                    return t;
+            }
+        }
+
+        // ==================== 缓动函数库 ====================
+
+        /// <summary>
+        /// 三次方缓动函数（Out）- 平滑减速
         /// </summary>
         private float EaseOutCubic(float t)
         {
             float f = t - 1f;
             return f * f * f + 1f;
+        }
+
+        /// <summary>
+        /// 弹性缓动函数（Out）- 适合交换动画
+        /// 产生类似弹簧的弹性效果
+        /// </summary>
+        private float EaseOutElastic(float t)
+        {
+            if (t == 0f || t == 1f)
+                return t;
+
+            float p = 0.3f;
+            float s = p / 4f;
+            return Mathf.Pow(2f, -10f * t) * Mathf.Sin((t - s) * (2f * Mathf.PI) / p) + 1f;
+        }
+
+        /// <summary>
+        /// 弹跳缓动函数（Out）- 适合下落动画
+        /// 产生类似球落地弹跳的效果
+        /// </summary>
+        private float EaseOutBounce(float t)
+        {
+            if (t < 1f / 2.75f)
+            {
+                return 7.5625f * t * t;
+            }
+            else if (t < 2f / 2.75f)
+            {
+                t -= 1.5f / 2.75f;
+                return 7.5625f * t * t + 0.75f;
+            }
+            else if (t < 2.5f / 2.75f)
+            {
+                t -= 2.25f / 2.75f;
+                return 7.5625f * t * t + 0.9375f;
+            }
+            else
+            {
+                t -= 2.625f / 2.75f;
+                return 7.5625f * t * t + 0.984375f;
+            }
+        }
+
+        /// <summary>
+        /// 回退缓动函数（InOut）- 适合特殊效果
+        /// 先回退一点，再前进，产生预备动作的效果
+        /// </summary>
+        private float EaseInOutBack(float t)
+        {
+            float s = 1.70158f * 1.525f;
+            t *= 2f;
+            if (t < 1f)
+            {
+                return 0.5f * (t * t * ((s + 1f) * t - s));
+            }
+            t -= 2f;
+            return 0.5f * (t * t * ((s + 1f) * t + s) + 2f);
         }
     }
 }

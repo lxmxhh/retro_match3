@@ -399,27 +399,16 @@ namespace RetroMatch2D.Managers
             Vector2Int pos1 = gem1.GridPosition;
             Vector2Int pos2 = gem2.GridPosition;
 
-            // 播放交换动画
-            float elapsed = 0f;
-            Vector3 startPos1 = gem1.transform.position;
-            Vector3 startPos2 = gem2.transform.position;
-            Vector3 endPos1 = gem2.transform.position;
-            Vector3 endPos2 = gem1.transform.position;
+            // 获取目标位置
+            Vector3 targetPos1 = gem2.transform.position;
+            Vector3 targetPos2 = gem1.transform.position;
 
-            while (elapsed < _swapDuration)
-            {
-                elapsed += Time.deltaTime;
-                float t = elapsed / _swapDuration;
+            // 使用弹性动画播放交换效果
+            gem1.MoveTo(targetPos1, _swapDuration, Gem.AnimationType.EaseOutElastic);
+            gem2.MoveTo(targetPos2, _swapDuration, Gem.AnimationType.EaseOutElastic);
 
-                gem1.transform.position = Vector3.Lerp(startPos1, endPos1, t);
-                gem2.transform.position = Vector3.Lerp(startPos2, endPos2, t);
-
-                yield return null;
-            }
-
-            // 确保最终位置正确
-            gem1.transform.position = endPos1;
-            gem2.transform.position = endPos2;
+            // 等待交换动画完成
+            yield return new WaitForSeconds(_swapDuration);
 
             // 在棋盘中交换宝石
             _board.SetGem(pos1.x, pos1.y, gem2);
