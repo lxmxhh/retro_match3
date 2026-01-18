@@ -148,24 +148,26 @@ namespace RetroMatch2D.Managers
         }
 
         /// <summary>
-        /// 根据匹配类型获取额外分数
+        /// 根据匹配类型获取额外分数（基于Royal Match规则）
         /// </summary>
         private int GetShapeBonus(MatchType matchType)
         {
             switch (matchType)
             {
-                case MatchType.Cross:
-                    return 500; // 十字型最高奖励
-                case MatchType.TShape:
-                    return 300; // T型高奖励
-                case MatchType.LShape:
-                    return 200; // L型中等奖励
                 case MatchType.Horizontal5:
                 case MatchType.Vertical5:
-                    return 150; // 5连奖励
+                    return 600; // Light Ball 最高奖励
+                case MatchType.TShape:
+                    return 400; // T型TNT（包括十字型）
+                case MatchType.LShape:
+                    return 300; // L型TNT
+                case MatchType.SquarePlus:
+                    return 280; // 2x2+1 增强Propeller
+                case MatchType.Square:
+                    return 250; // 2x2 Propeller
                 case MatchType.Horizontal4:
                 case MatchType.Vertical4:
-                    return 100; // 4连奖励
+                    return 150; // Rocket
                 default:
                     return 0; // 普通3连无额外奖励
             }

@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using RetroMatch2D.Core;
 
 namespace RetroMatch2D.Managers
@@ -450,7 +451,7 @@ namespace RetroMatch2D.Managers
         
         /// <summary>
         /// 填充整个棋盘
-        /// 为所有空位生成新的宝石
+        /// 为所有空位生成新的宝石，确保初始化时没有可消除的匹配
         /// </summary>
         public void FillBoard()
         {
@@ -460,9 +461,9 @@ namespace RetroMatch2D.Managers
                 {
                     if (_board.GetGem(x, y) == null)
                     {
-                        // 生成新宝石
-                        GemType randomType = GetRandomGemType();
-                        SpawnGem(x, y, randomType);
+                        // 生成不会立即形成匹配的宝石
+                        GemType safeType = GetSafeRandomGemType(x, y);
+                        SpawnGem(x, y, safeType);
                     }
                 }
             }
@@ -520,6 +521,63 @@ namespace RetroMatch2D.Managers
             };
 
             return availableTypes[Random.Range(0, availableTypes.Length)];
+        }
+
+        /// <summary>
+        /// 获取安全的随机宝石类型（不会立即形成匹配）
+        /// 用于初始化棋盘，确保没有可消除的状态
+        /// </summary>
+        /// <param name="x">目标X坐标</param>
+        /// <param name="y">目标Y坐标</param>
+        /// <returns>不会立即形成匹配的宝石类型</returns>
+        private GemType GetSafeRandomGemType(int x, int y)
+        {
+            GemType[] availableTypes = new GemType[]
+            {
+                GemType.Red,
+                GemType.Blue,
+                GemType.Green,
+                GemType.Yellow,
+                GemType.Purple
+            };
+
+            // 收集禁止的宝石类型（会导致立即匹配的类型）
+            var forbiddenTypes = new HashSet<GemType>();
+
+            // 检查水平方向：如果左侧有2个连续相同的宝石，禁止使用该类型
+            if (x >= 2)
+            {
+                Gem gem1 = _board.GetGem(x - 1, y);
+                Gem gem2 = _board.GetGem(x - 2, y);
+                if (gem1 != null && gem2 != null && gem1.Type == gem2.Type)
+                {
+                    forbiddenTypes.Add(gem1.Type);
+                }
+            }
+
+            // 检查垂直方向：如果下方有2个连续相同的宝石，禁止使用该类型
+            if (y >= 2)
+            {
+                Gem gem1 = _board.GetGem(x, y - 1);
+                Gem gem2 = _board.GetGem(x, y - 2);
+                if (gem1 != null && gem2 != null && gem1.Type == gem2.Type)
+                {
+                    forbiddenTypes.Add(gem1.Type);
+                }
+            }
+
+            // 筛选出可用的宝石类型
+            var safeTypes = availableTypes.Where(t => !forbiddenTypes.Contains(t)).ToArray();
+
+            // 如果所有类型都被禁止（极端情况），返回任意类型
+            if (safeTypes.Length == 0)
+            {
+                Debug.LogWarning($"GameManager: 位置({x},{y})无法找到安全的宝石类型，返回随机类型");
+                return GetRandomGemType();
+            }
+
+            // 从安全类型中随机选择
+            return safeTypes[Random.Range(0, safeTypes.Length)];
         }
 
         /// <summary>

@@ -13,13 +13,14 @@ namespace RetroMatch2D.Core
         None = 0,           // 无匹配
         Horizontal3 = 1,    // 水平3连
         Vertical3 = 2,      // 垂直3连
-        Horizontal4 = 3,    // 水平4连
-        Vertical4 = 4,      // 垂直4连
-        Horizontal5 = 5,    // 水平5连或更多
-        Vertical5 = 6,      // 垂直5连或更多
-        LShape = 7,         // L型（3+2）
-        TShape = 8,         // T型（3+2+2或交叉）
-        Cross = 9           // 十字型（垂直3+水平3交叉）
+        Horizontal4 = 3,    // 水平4连 (Rocket)
+        Vertical4 = 4,      // 垂直4连 (Rocket)
+        Horizontal5 = 5,    // 水平5连或更多 (Light Ball)
+        Vertical5 = 6,      // 垂直5连或更多 (Light Ball)
+        Square = 7,         // 田字格 2x2 (Propeller)
+        SquarePlus = 11,    // 田字格+1 2x2+1 (增强Propeller, 5个宝石)
+        LShape = 8,         // L型 (TNT)
+        TShape = 9          // T型 (TNT) - 包括十字型
     }
 
     /// <summary>
@@ -49,35 +50,39 @@ namespace RetroMatch2D.Core
         }
 
         /// <summary>
-        /// 根据匹配类型和数量计算优先级
+        /// 根据Royal Match规则计算优先级
+        /// 优先级顺序：Light Ball > T型TNT > L型TNT > 2x2+1 > 2x2 Propeller > Rocket > Basic 3
         /// </summary>
         private int CalculatePriority(MatchType type, int gemCount)
         {
             // 基础优先级：宝石数量
             int priority = gemCount * 10;
 
-            // 特殊形状加成
+            // Royal Match特殊形状优先级
             switch (type)
             {
-                case MatchType.Cross:
-                    priority += 100; // 十字型最高优先级
-                    break;
-                case MatchType.TShape:
-                    priority += 80; // T型次高
-                    break;
-                case MatchType.LShape:
-                    priority += 60; // L型中等
-                    break;
                 case MatchType.Horizontal5:
                 case MatchType.Vertical5:
-                    priority += 50; // 5连较高
+                    priority += 1000; // Light Ball 最高优先级
+                    break;
+                case MatchType.TShape:
+                    priority += 800; // T型TNT（包括十字型）
+                    break;
+                case MatchType.LShape:
+                    priority += 700; // L型TNT
+                    break;
+                case MatchType.SquarePlus:
+                    priority += 650; // 2x2+1 增强Propeller
+                    break;
+                case MatchType.Square:
+                    priority += 600; // 2x2 Propeller
                     break;
                 case MatchType.Horizontal4:
                 case MatchType.Vertical4:
-                    priority += 30; // 4连中等
+                    priority += 400; // Rocket
                     break;
                 default:
-                    break;
+                    break; // Basic 3-match 优先级最低
             }
 
             return priority;
@@ -85,9 +90,8 @@ namespace RetroMatch2D.Core
     }
 
     /// <summary>
-    /// 匹配检测系统
-    /// 负责检测棋盘上的匹配宝石（3个或更多相同类型的宝石连成一线）
-    /// 支持水平、垂直、L型、T型等多种匹配模式
+    /// 匹配检测系统 - 基于Royal Match规则重写
+    /// 实现"连续判定"规则：匹配形状判定时，往外探查连续同色物品，尽可能多的消除连续的同色物品
     /// </summary>
     public class MatchDetector
     {
@@ -96,251 +100,553 @@ namespace RetroMatch2D.Core
         /// </summary>
         private const int MINIMUM_MATCH_LENGTH = 3;
 
+        // ==================== 新的Royal Match规则匹配系统 ====================
+
         /// <summary>
-        /// 查找所有匹配项
-        /// 返回一个包含所有匹配组的列表，每个匹配组是一个宝石列表
+        /// 增强的匹配检测 - 基于Royal Match规则
+        /// 检测顺序：Light Ball > L/T TNT > 2x2+1 > 2x2 Propeller > Rocket > Basic 3
+        /// 所有匹配都明确定义，不使用扩展算法
         /// </summary>
-        /// <param name="board">棋盘对象</param>
-        /// <returns>所有匹配的宝石组列表</returns>
-        public static List<List<Gem>> FindMatches(Board board)
+        public static List<MatchData> FindMatchesEnhanced(Board board)
         {
             if (board == null)
             {
-                Debug.LogError("MatchDetector.FindMatches: Board is null!");
-                return new List<List<Gem>>();
+                Debug.LogError("MatchDetector.FindMatchesEnhanced: Board is null!");
+                return new List<MatchData>();
             }
 
-            var allMatches = new List<List<Gem>>();
+            // 阶段1：收集所有可能的匹配（不立即标记）
+            var allCandidates = new List<MatchData>();
 
-            // 查找水平匹配
-            var horizontalMatches = FindHorizontalMatches(board);
-            allMatches.AddRange(horizontalMatches);
-
-            // 查找垂直匹配
-            var verticalMatches = FindVerticalMatches(board);
-            allMatches.AddRange(verticalMatches);
-
-            // 移除重复的匹配（同一个宝石不应该同时被计算为水平和垂直匹配）
-            allMatches = RemoveDuplicateMatches(allMatches);
-
-            Debug.Log($"MatchDetector: Found {allMatches.Count} matches");
-
-            return allMatches;
-        }
-
-        /// <summary>
-        /// 查找所有水平匹配
-        /// 逐行扫描，寻找连续的相同类型宝石
-        /// </summary>
-        /// <param name="board">棋盘对象</param>
-        /// <returns>水平匹配的宝石组列表</returns>
-        private static List<List<Gem>> FindHorizontalMatches(Board board)
-        {
-            var horizontalMatches = new List<List<Gem>>();
-
-            // 遍历每一行
-            for (int y = 0; y < board.Height; y++)
-            {
-                // 从每一行的第一列开始
-                for (int x = 0; x < board.Width; )
-                {
-                    Gem currentGem = board.GetGem(x, y);
-
-                    // 跳过空宝石
-                    if (currentGem == null)
-                    {
-                        x++;
-                        continue;
-                    }
-
-                    // 沿水平方向检查匹配
-                    var matchGroup = CheckDirection(board, x, y, 1, 0); // 向右检查
-
-                    // 如果找到有效匹配，添加到列表
-                    if (matchGroup.Count >= MINIMUM_MATCH_LENGTH)
-                    {
-                        horizontalMatches.Add(matchGroup);
-                        // 跳过已经匹配的宝石
-                        x += matchGroup.Count;
-                    }
-                    else
-                    {
-                        x++;
-                    }
-                }
-            }
-
-            return horizontalMatches;
-        }
-
-        /// <summary>
-        /// 查找所有垂直匹配
-        /// 逐列扫描，寻找连续的相同类型宝石
-        /// </summary>
-        /// <param name="board">棋盘对象</param>
-        /// <returns>垂直匹配的宝石组列表</returns>
-        private static List<List<Gem>> FindVerticalMatches(Board board)
-        {
-            var verticalMatches = new List<List<Gem>>();
-
-            // 遍历每一列
+            // 遍历整个棋盘，收集所有匹配
             for (int x = 0; x < board.Width; x++)
             {
-                // 从每一列的第一行开始
-                for (int y = 0; y < board.Height; )
+                for (int y = 0; y < board.Height; y++)
                 {
                     Gem currentGem = board.GetGem(x, y);
-
-                    // 跳过空宝石
                     if (currentGem == null)
-                    {
-                        y++;
                         continue;
-                    }
 
-                    // 沿垂直方向检查匹配
-                    var matchGroup = CheckDirection(board, x, y, 0, 1); // 向上检查
+                    GemType gemType = currentGem.Type;
 
-                    // 如果找到有效匹配，添加到列表
-                    if (matchGroup.Count >= MINIMUM_MATCH_LENGTH)
-                    {
-                        verticalMatches.Add(matchGroup);
-                        // 跳过已经匹配的宝石
-                        y += matchGroup.Count;
-                    }
-                    else
-                    {
-                        y++;
-                    }
+                    // 检测所有类型的匹配（从高优先级到低优先级）
+                    var emptyProcessed = new HashSet<Gem>(); // 临时空集，不影响后续检测
+
+                    // 1. Light Ball (5+连)
+                    var lightBallMatch = TryFindLightBall(board, x, y, gemType, emptyProcessed);
+                    if (lightBallMatch != null)
+                        allCandidates.Add(lightBallMatch);
+
+                    // 2. L型和T型 (TNT)
+                    var lOrTMatch = TryFindLOrTShape(board, x, y, gemType, emptyProcessed);
+                    if (lOrTMatch != null)
+                        allCandidates.Add(lOrTMatch);
+
+                    // 3. 2x2+1方块 (增强Propeller)
+                    var squarePlusMatch = TryFindSquarePlus(board, x, y, gemType, emptyProcessed);
+                    if (squarePlusMatch != null)
+                        allCandidates.Add(squarePlusMatch);
+
+                    // 4. 2x2方块 (Propeller)
+                    var squareMatch = TryFindSquare(board, x, y, gemType, emptyProcessed);
+                    if (squareMatch != null)
+                        allCandidates.Add(squareMatch);
+
+                    // 5. Rocket (4连)
+                    var rocketMatch = TryFindRocket(board, x, y, gemType, emptyProcessed);
+                    if (rocketMatch != null)
+                        allCandidates.Add(rocketMatch);
+
+                    // 6. 基础3连
+                    var basicMatch = TryFindBasicMatch(board, x, y, gemType, emptyProcessed);
+                    if (basicMatch != null)
+                        allCandidates.Add(basicMatch);
                 }
             }
 
-            return verticalMatches;
-        }
+            // 阶段2：按优先级排序
+            allCandidates = allCandidates.OrderByDescending(m => m.Priority).ToList();
 
-        /// <summary>
-        /// 辅助方法：沿指定方向检查连续的相同宝石
-        /// </summary>
-        /// <param name="board">棋盘对象</param>
-        /// <param name="startX">起始X坐标</param>
-        /// <param name="startY">起始Y坐标</param>
-        /// <param name="dirX">检查方向的X分量（-1, 0, 或 1）</param>
-        /// <param name="dirY">检查方向的Y分量（-1, 0, 或 1）</param>
-        /// <returns>沿该方向连续相同类型的宝石列表</returns>
-        private static List<Gem> CheckDirection(Board board, int startX, int startY, int dirX, int dirY)
-        {
-            var matchGroup = new List<Gem>();
-
-            // 获取起始位置的宝石
-            Gem startGem = board.GetGem(startX, startY);
-
-            if (startGem == null)
-            {
-                return matchGroup; // 返回空列表
-            }
-
-            // 记录起始宝石的类型
-            GemType targetType = startGem.Type;
-
-            // 沿指定方向遍历
-            int currentX = startX;
-            int currentY = startY;
-
-            while (board.IsValidPosition(currentX, currentY))
-            {
-                Gem currentGem = board.GetGem(currentX, currentY);
-
-                // 如果宝石为空或类型不同，停止检查
-                if (currentGem == null || currentGem.Type != targetType)
-                {
-                    break;
-                }
-
-                // 添加宝石到匹配组
-                matchGroup.Add(currentGem);
-
-                // 沿方向继续移动
-                currentX += dirX;
-                currentY += dirY;
-            }
-
-            return matchGroup;
-        }
-
-        /// <summary>
-        /// 移除重复的匹配
-        /// 如果一个宝石已经在一个匹配组中，就不应该再出现在另一个匹配组中
-        /// </summary>
-        /// <param name="matches">包含所有匹配的列表</param>
-        /// <returns>移除重复后的匹配列表</returns>
-        private static List<List<Gem>> RemoveDuplicateMatches(List<List<Gem>> matches)
-        {
-            if (matches.Count == 0)
-            {
-                return matches;
-            }
-
-            var uniqueMatches = new List<List<Gem>>();
+            // 阶段3：去重，选择不冲突的匹配
+            var finalMatches = new List<MatchData>();
             var usedGems = new HashSet<Gem>();
 
-            // 按匹配长度从长到短排序，优先保留更长的匹配
-            var sortedMatches = matches.OrderByDescending(m => m.Count).ToList();
-
-            foreach (var match in sortedMatches)
+            foreach (var candidate in allCandidates)
             {
-                // 检查这个匹配组中是否有已经被使用过的宝石
-                bool hasUsedGem = false;
-                foreach (var gem in match)
-                {
-                    if (usedGems.Contains(gem))
-                    {
-                        hasUsedGem = true;
-                        break;
-                    }
-                }
+                // 检查这个匹配的宝石是否已被使用
+                bool hasConflict = candidate.Gems.Any(g => usedGems.Contains(g));
 
-                // 如果没有重复，添加到结果列表
-                if (!hasUsedGem)
+                if (!hasConflict)
                 {
-                    uniqueMatches.Add(match);
-
+                    finalMatches.Add(candidate);
                     // 标记这些宝石为已使用
-                    foreach (var gem in match)
+                    foreach (var gem in candidate.Gems)
                     {
                         usedGems.Add(gem);
                     }
                 }
             }
 
-            return uniqueMatches;
+            Debug.Log($"MatchDetector Enhanced: Found {finalMatches.Count} matches (from {allCandidates.Count} candidates)");
+
+            return finalMatches;
+        }
+
+        /// <summary>
+        /// 核心算法：连续扩展 - 从种子宝石开始，找到所有连续同色宝石
+        /// 实现Royal Match的"连续判定"规则
+        /// </summary>
+        /// <param name="board">棋盘</param>
+        /// <param name="seeds">种子宝石列表</param>
+        /// <param name="gemType">目标宝石类型</param>
+        /// <returns>所有连续同色的宝石（包括种子）</returns>
+        private static List<Gem> ExpandContinuousGems(Board board, List<Gem> seeds, GemType gemType)
+        {
+            var result = new HashSet<Gem>(seeds);
+            var queue = new Queue<Gem>(seeds);
+
+            // BFS广度优先搜索
+            while (queue.Count > 0)
+            {
+                Gem current = queue.Dequeue();
+                Vector2Int pos = current.GridPosition;
+
+                // 检查四个方向（上下左右）
+                Vector2Int[] directions = new Vector2Int[]
+                {
+                    new Vector2Int(0, 1),  // 上
+                    new Vector2Int(0, -1), // 下
+                    new Vector2Int(-1, 0), // 左
+                    new Vector2Int(1, 0)   // 右
+                };
+
+                foreach (var dir in directions)
+                {
+                    int newX = pos.x + dir.x;
+                    int newY = pos.y + dir.y;
+
+                    if (!board.IsValidPosition(newX, newY))
+                        continue;
+
+                    Gem neighbor = board.GetGem(newX, newY);
+                    if (neighbor == null || neighbor.Type != gemType)
+                        continue;
+
+                    if (!result.Contains(neighbor))
+                    {
+                        result.Add(neighbor);
+                        queue.Enqueue(neighbor);
+                    }
+                }
+            }
+
+            return result.ToList();
+        }
+
+        /// <summary>
+        /// 尝试检测Light Ball (5+连)
+        /// 直线型匹配不需要连续扩展，只消除这条直线上的宝石
+        /// </summary>
+        private static MatchData TryFindLightBall(Board board, int x, int y, GemType gemType, HashSet<Gem> processedGems)
+        {
+            // 检查水平5+连
+            var horizLine = CheckDirectionContinuous(board, x, y, 1, 0, gemType);
+            if (horizLine.Count >= 5)
+            {
+                if (horizLine.Any(g => processedGems.Contains(g)))
+                    return null; // 已被处理
+                return new MatchData(horizLine, MatchType.Horizontal5, gemType);
+            }
+
+            // 检查垂直5+连
+            var vertLine = CheckDirectionContinuous(board, x, y, 0, 1, gemType);
+            if (vertLine.Count >= 5)
+            {
+                if (vertLine.Any(g => processedGems.Contains(g)))
+                    return null;
+                return new MatchData(vertLine, MatchType.Vertical5, gemType);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 尝试检测L型或T型 (TNT)
+        /// L型和T型不需要连续扩展，只消除匹配到的形状本身
+        /// </summary>
+        private static MatchData TryFindLOrTShape(Board board, int x, int y, GemType gemType, HashSet<Gem> processedGems)
+        {
+            Gem centerGem = board.GetGem(x, y);
+            if (centerGem == null || centerGem.Type != gemType)
+                return null;
+
+            // 检查4个方向的连续宝石
+            var up = CheckDirectionContinuous(board, x, y, 0, 1, gemType);
+            var down = CheckDirectionContinuous(board, x, y, 0, -1, gemType);
+            var left = CheckDirectionContinuous(board, x, y, -1, 0, gemType);
+            var right = CheckDirectionContinuous(board, x, y, 1, 0, gemType);
+
+            // 合并对向的连线（去重中心点）
+            var vertical = MergeLines(up, down, centerGem);
+            var horizontal = MergeLines(left, right, centerGem);
+
+            // 检测十字型 - 水平3+ 且 垂直3+，归类为T型TNT
+            if (horizontal.Count >= 3 && vertical.Count >= 3)
+            {
+                var seeds = new HashSet<Gem>(horizontal);
+                foreach (var gem in vertical) seeds.Add(gem);
+                if (seeds.Any(g => processedGems.Contains(g)))
+                    return null;
+                return new MatchData(seeds.ToList(), MatchType.TShape, gemType);
+            }
+
+            // 检测T型 - 一个方向3+，另一个方向只有一侧延伸2+
+            // T型情况1：水平主线3+，垂直只有一侧2+（上或下）
+            if (horizontal.Count >= 3)
+            {
+                // 上侧有2+，下侧不足2（或没有）
+                if (up.Count >= 2 && down.Count < 2)
+                {
+                    var seeds = new HashSet<Gem>(horizontal);
+                    foreach (var gem in up) seeds.Add(gem);
+                    if (seeds.Count >= 5)
+                    {
+                        if (seeds.Any(g => processedGems.Contains(g)))
+                            return null;
+                        return new MatchData(seeds.ToList(), MatchType.TShape, gemType);
+                    }
+                }
+                // 下侧有2+，上侧不足2（或没有）
+                if (down.Count >= 2 && up.Count < 2)
+                {
+                    var seeds = new HashSet<Gem>(horizontal);
+                    foreach (var gem in down) seeds.Add(gem);
+                    if (seeds.Count >= 5)
+                    {
+                        if (seeds.Any(g => processedGems.Contains(g)))
+                            return null;
+                        return new MatchData(seeds.ToList(), MatchType.TShape, gemType);
+                    }
+                }
+            }
+
+            // T型情况2：垂直主线3+，水平只有一侧2+（左或右）
+            if (vertical.Count >= 3)
+            {
+                // 左侧有2+，右侧不足2（或没有）
+                if (left.Count >= 2 && right.Count < 2)
+                {
+                    var seeds = new HashSet<Gem>(vertical);
+                    foreach (var gem in left) seeds.Add(gem);
+                    if (seeds.Count >= 5)
+                    {
+                        if (seeds.Any(g => processedGems.Contains(g)))
+                            return null;
+                        return new MatchData(seeds.ToList(), MatchType.TShape, gemType);
+                    }
+                }
+                // 右侧有2+，左侧不足2（或没有）
+                if (right.Count >= 2 && left.Count < 2)
+                {
+                    var seeds = new HashSet<Gem>(vertical);
+                    foreach (var gem in right) seeds.Add(gem);
+                    if (seeds.Count >= 5)
+                    {
+                        if (seeds.Any(g => processedGems.Contains(g)))
+                            return null;
+                        return new MatchData(seeds.ToList(), MatchType.TShape, gemType);
+                    }
+                }
+            }
+
+            // 检测L型 - 检查4种L型配置
+            // L型定义：从角点出发，两个方向各有至少3个（包括中心），总共至少5个
+
+            // 右上L (┘)
+            if (right.Count >= 3 && up.Count >= 3)
+            {
+                var seeds = new HashSet<Gem>(right);
+                foreach (var gem in up) seeds.Add(gem);
+                // L型至少需要5个宝石
+                if (seeds.Count >= 5)
+                {
+                    if (seeds.Any(g => processedGems.Contains(g)))
+                        return null;
+                    return new MatchData(seeds.ToList(), MatchType.LShape, gemType);
+                }
+            }
+
+            // 右下L (┐)
+            if (right.Count >= 3 && down.Count >= 3)
+            {
+                var seeds = new HashSet<Gem>(right);
+                foreach (var gem in down) seeds.Add(gem);
+                if (seeds.Count >= 5)
+                {
+                    if (seeds.Any(g => processedGems.Contains(g)))
+                        return null;
+                    return new MatchData(seeds.ToList(), MatchType.LShape, gemType);
+                }
+            }
+
+            // 左上L (└)
+            if (left.Count >= 3 && up.Count >= 3)
+            {
+                var seeds = new HashSet<Gem>(left);
+                foreach (var gem in up) seeds.Add(gem);
+                if (seeds.Count >= 5)
+                {
+                    if (seeds.Any(g => processedGems.Contains(g)))
+                        return null;
+                    return new MatchData(seeds.ToList(), MatchType.LShape, gemType);
+                }
+            }
+
+            // 左下L (┌)
+            if (left.Count >= 3 && down.Count >= 3)
+            {
+                var seeds = new HashSet<Gem>(left);
+                foreach (var gem in down) seeds.Add(gem);
+                if (seeds.Count >= 5)
+                {
+                    if (seeds.Any(g => processedGems.Contains(g)))
+                        return null;
+                    return new MatchData(seeds.ToList(), MatchType.LShape, gemType);
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 尝试检测2x2+1方块 (增强Propeller)
+        /// 2x2核心 + 周围1个同色宝石，共5个宝石
+        /// </summary>
+        private static MatchData TryFindSquarePlus(Board board, int x, int y, GemType gemType, HashSet<Gem> processedGems)
+        {
+            // 检查以(x,y)为左下角的2x2方块
+            if (!board.IsValidPosition(x + 1, y) || !board.IsValidPosition(x, y + 1) || !board.IsValidPosition(x + 1, y + 1))
+                return null;
+
+            Gem gem1 = board.GetGem(x, y);
+            Gem gem2 = board.GetGem(x + 1, y);
+            Gem gem3 = board.GetGem(x, y + 1);
+            Gem gem4 = board.GetGem(x + 1, y + 1);
+
+            if (gem1 == null || gem2 == null || gem3 == null || gem4 == null)
+                return null;
+
+            if (gem1.Type != gemType || gem2.Type != gemType || gem3.Type != gemType || gem4.Type != gemType)
+                return null;
+
+            // 找到2x2核心，现在检查周围8个位置是否有第5个同色宝石
+            // 周围8个位置：上2、下2、左2、右2
+            var adjacentPositions = new List<(int, int)>
+            {
+                (x, y + 2),     // 左上方
+                (x + 1, y + 2), // 右上方
+                (x, y - 1),     // 左下方
+                (x + 1, y - 1), // 右下方
+                (x - 1, y),     // 左下侧
+                (x - 1, y + 1), // 左上侧
+                (x + 2, y),     // 右下侧
+                (x + 2, y + 1)  // 右上侧
+            };
+
+            // 检查是否有恰好1个相邻的同色宝石
+            Gem fifthGem = null;
+            foreach (var (px, py) in adjacentPositions)
+            {
+                if (board.IsValidPosition(px, py))
+                {
+                    Gem adjacentGem = board.GetGem(px, py);
+                    if (adjacentGem != null && adjacentGem.Type == gemType)
+                    {
+                        fifthGem = adjacentGem;
+                        break; // 找到第5个宝石
+                    }
+                }
+            }
+
+            // 如果没有找到第5个宝石，不是2x2+1模式
+            if (fifthGem == null)
+                return null;
+
+            // 组成2x2+1，共5个宝石
+            var squarePlusGems = new List<Gem> { gem1, gem2, gem3, gem4, fifthGem };
+
+            if (squarePlusGems.Any(g => processedGems.Contains(g)))
+                return null;
+
+            return new MatchData(squarePlusGems, MatchType.SquarePlus, gemType);
+        }
+
+        /// <summary>
+        /// 尝试检测标准2x2方块 (Propeller)
+        /// 恰好4个宝石，不扩展
+        /// </summary>
+        private static MatchData TryFindSquare(Board board, int x, int y, GemType gemType, HashSet<Gem> processedGems)
+        {
+            // 检查以(x,y)为左下角的2x2方块
+            if (!board.IsValidPosition(x + 1, y) || !board.IsValidPosition(x, y + 1) || !board.IsValidPosition(x + 1, y + 1))
+                return null;
+
+            Gem gem1 = board.GetGem(x, y);
+            Gem gem2 = board.GetGem(x + 1, y);
+            Gem gem3 = board.GetGem(x, y + 1);
+            Gem gem4 = board.GetGem(x + 1, y + 1);
+
+            if (gem1 == null || gem2 == null || gem3 == null || gem4 == null)
+                return null;
+
+            if (gem1.Type != gemType || gem2.Type != gemType || gem3.Type != gemType || gem4.Type != gemType)
+                return null;
+
+            // 标准2x2方块，恰好4个宝石
+            var squareGems = new List<Gem> { gem1, gem2, gem3, gem4 };
+
+            if (squareGems.Any(g => processedGems.Contains(g)))
+                return null;
+
+            return new MatchData(squareGems, MatchType.Square, gemType);
+        }
+
+        /// <summary>
+        /// 尝试检测Rocket (4连)
+        /// 直线型匹配不需要连续扩展，只消除这条直线上的宝石
+        /// </summary>
+        private static MatchData TryFindRocket(Board board, int x, int y, GemType gemType, HashSet<Gem> processedGems)
+        {
+            // 检查水平4连
+            var horizLine = CheckDirectionContinuous(board, x, y, 1, 0, gemType);
+            if (horizLine.Count == 4)
+            {
+                if (horizLine.Any(g => processedGems.Contains(g)))
+                    return null;
+                return new MatchData(horizLine, MatchType.Horizontal4, gemType);
+            }
+
+            // 检查垂直4连
+            var vertLine = CheckDirectionContinuous(board, x, y, 0, 1, gemType);
+            if (vertLine.Count == 4)
+            {
+                if (vertLine.Any(g => processedGems.Contains(g)))
+                    return null;
+                return new MatchData(vertLine, MatchType.Vertical4, gemType);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 尝试检测基础3连
+        /// 直线型匹配不需要连续扩展，只消除这条直线上的宝石
+        /// </summary>
+        private static MatchData TryFindBasicMatch(Board board, int x, int y, GemType gemType, HashSet<Gem> processedGems)
+        {
+            // 检查水平3连
+            var horizLine = CheckDirectionContinuous(board, x, y, 1, 0, gemType);
+            if (horizLine.Count >= 3)
+            {
+                if (horizLine.Any(g => processedGems.Contains(g)))
+                    return null;
+                return new MatchData(horizLine, MatchType.Horizontal3, gemType);
+            }
+
+            // 检查垂直3连
+            var vertLine = CheckDirectionContinuous(board, x, y, 0, 1, gemType);
+            if (vertLine.Count >= 3)
+            {
+                if (vertLine.Any(g => processedGems.Contains(g)))
+                    return null;
+                return new MatchData(vertLine, MatchType.Vertical3, gemType);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 沿指定方向检查连续的相同宝石（单向检测）
+        /// </summary>
+        private static List<Gem> CheckDirectionContinuous(Board board, int startX, int startY, int dirX, int dirY, GemType gemType)
+        {
+            var result = new List<Gem>();
+            int x = startX;
+            int y = startY;
+
+            while (board.IsValidPosition(x, y))
+            {
+                Gem gem = board.GetGem(x, y);
+                if (gem == null || gem.Type != gemType)
+                    break;
+
+                result.Add(gem);
+                x += dirX;
+                y += dirY;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 合并两条对向的线（去重中心点）
+        /// </summary>
+        private static List<Gem> MergeLines(List<Gem> line1, List<Gem> line2, Gem centerGem)
+        {
+            var result = new HashSet<Gem>();
+
+            // line1和line2都包含中心点，需要去重
+            foreach (var gem in line1)
+                result.Add(gem);
+            foreach (var gem in line2)
+                result.Add(gem);
+
+            return result.ToList();
+        }
+
+        /// <summary>
+        /// 标记宝石为已处理
+        /// </summary>
+        private static void MarkGemsAsProcessed(List<Gem> gems, HashSet<Gem> processedGems)
+        {
+            foreach (var gem in gems)
+            {
+                processedGems.Add(gem);
+            }
+        }
+
+        // ==================== 向后兼容的旧API ====================
+
+        /// <summary>
+        /// 查找所有匹配项（向后兼容）
+        /// 内部调用新的Enhanced系统
+        /// </summary>
+        public static List<List<Gem>> FindMatches(Board board)
+        {
+            var enhancedMatches = FindMatchesEnhanced(board);
+            return enhancedMatches.Select(m => m.Gems).ToList();
         }
 
         /// <summary>
         /// 检查是否存在任何匹配
-        /// 便利方法，用于快速判断棋盘是否有可消除的匹配
         /// </summary>
-        /// <param name="board">棋盘对象</param>
-        /// <returns>如果存在匹配返回true，否则返回false</returns>
         public static bool HasMatches(Board board)
         {
-            var matches = FindMatches(board);
+            var matches = FindMatchesEnhanced(board);
             return matches.Count > 0;
         }
 
         /// <summary>
         /// 获取总匹配数
-        /// 便利方法，用于统计匹配宝石的总数
         /// </summary>
-        /// <param name="board">棋盘对象</param>
-        /// <returns>所有匹配宝石的总数</returns>
         public static int GetTotalMatchCount(Board board)
         {
-            var matches = FindMatches(board);
+            var matches = FindMatchesEnhanced(board);
             int totalCount = 0;
 
             foreach (var match in matches)
             {
-                totalCount += match.Count;
+                totalCount += match.Gems.Count;
             }
 
             return totalCount;
@@ -349,13 +655,9 @@ namespace RetroMatch2D.Core
         /// <summary>
         /// 获取指定位置是否有宝石被匹配
         /// </summary>
-        /// <param name="board">棋盘对象</param>
-        /// <param name="x">X坐标</param>
-        /// <param name="y">Y坐标</param>
-        /// <returns>如果该位置的宝石被匹配返回true，否则返回false</returns>
         public static bool IsGemMatched(Board board, int x, int y)
         {
-            var matches = FindMatches(board);
+            var matches = FindMatchesEnhanced(board);
             Gem targetGem = board.GetGem(x, y);
 
             if (targetGem == null)
@@ -365,7 +667,7 @@ namespace RetroMatch2D.Core
 
             foreach (var match in matches)
             {
-                if (match.Contains(targetGem))
+                if (match.Gems.Contains(targetGem))
                 {
                     return true;
                 }
@@ -375,9 +677,8 @@ namespace RetroMatch2D.Core
         }
 
         /// <summary>
-        /// 调试用：打印匹配信息
+        /// 调试用：打印匹配信息（向后兼容）
         /// </summary>
-        /// <param name="matches">匹配列表</param>
         public static void DebugPrintMatches(List<List<Gem>> matches)
         {
             if (matches.Count == 0)
@@ -394,469 +695,6 @@ namespace RetroMatch2D.Core
                 var positions = string.Join(", ", match.Select(g => $"({g.GridPosition.x},{g.GridPosition.y})"));
                 Debug.Log($"  Match {i + 1}: {match.Count} gems of type {match[0].Type} at [{positions}]");
             }
-        }
-
-        // ==================== 增强匹配检测系统 ====================
-
-        /// <summary>
-        /// 增强的匹配检测 - 支持L型、T型、4连、5连等特殊匹配
-        /// 返回包含匹配类型和优先级的MatchData列表
-        /// </summary>
-        public static List<MatchData> FindMatchesEnhanced(Board board)
-        {
-            if (board == null)
-            {
-                Debug.LogError("MatchDetector.FindMatchesEnhanced: Board is null!");
-                return new List<MatchData>();
-            }
-
-            var allMatches = new List<MatchData>();
-
-            // 1. 查找所有基础线性匹配（水平和垂直）
-            var linearMatches = FindLinearMatchesEnhanced(board);
-            allMatches.AddRange(linearMatches);
-
-            // 2. 查找L型匹配
-            var lShapeMatches = FindLShapeMatches(board);
-            allMatches.AddRange(lShapeMatches);
-
-            // 3. 查找T型和十字型匹配
-            var tShapeMatches = FindTShapeMatches(board);
-            allMatches.AddRange(tShapeMatches);
-
-            // 4. 去重并按优先级排序
-            allMatches = RemoveDuplicateMatchData(allMatches);
-            allMatches = allMatches.OrderByDescending(m => m.Priority).ToList();
-
-            Debug.Log($"MatchDetector Enhanced: Found {allMatches.Count} matches");
-
-            return allMatches;
-        }
-
-        /// <summary>
-        /// 查找所有线性匹配（水平和垂直），并标识4连、5连
-        /// </summary>
-        private static List<MatchData> FindLinearMatchesEnhanced(Board board)
-        {
-            var matches = new List<MatchData>();
-
-            // 水平匹配
-            for (int y = 0; y < board.Height; y++)
-            {
-                for (int x = 0; x < board.Width;)
-                {
-                    Gem currentGem = board.GetGem(x, y);
-                    if (currentGem == null)
-                    {
-                        x++;
-                        continue;
-                    }
-
-                    var matchGroup = CheckDirection(board, x, y, 1, 0);
-                    if (matchGroup.Count >= MINIMUM_MATCH_LENGTH)
-                    {
-                        MatchType matchType = DetermineLinearMatchType(matchGroup.Count, true);
-                        matches.Add(new MatchData(matchGroup, matchType, currentGem.Type));
-                        x += matchGroup.Count;
-                    }
-                    else
-                    {
-                        x++;
-                    }
-                }
-            }
-
-            // 垂直匹配
-            for (int x = 0; x < board.Width; x++)
-            {
-                for (int y = 0; y < board.Height;)
-                {
-                    Gem currentGem = board.GetGem(x, y);
-                    if (currentGem == null)
-                    {
-                        y++;
-                        continue;
-                    }
-
-                    var matchGroup = CheckDirection(board, x, y, 0, 1);
-                    if (matchGroup.Count >= MINIMUM_MATCH_LENGTH)
-                    {
-                        MatchType matchType = DetermineLinearMatchType(matchGroup.Count, false);
-                        matches.Add(new MatchData(matchGroup, matchType, currentGem.Type));
-                        y += matchGroup.Count;
-                    }
-                    else
-                    {
-                        y++;
-                    }
-                }
-            }
-
-            return matches;
-        }
-
-        /// <summary>
-        /// 根据匹配长度和方向确定线性匹配类型
-        /// </summary>
-        private static MatchType DetermineLinearMatchType(int length, bool isHorizontal)
-        {
-            if (length >= 5)
-            {
-                return isHorizontal ? MatchType.Horizontal5 : MatchType.Vertical5;
-            }
-            else if (length == 4)
-            {
-                return isHorizontal ? MatchType.Horizontal4 : MatchType.Vertical4;
-            }
-            else
-            {
-                return isHorizontal ? MatchType.Horizontal3 : MatchType.Vertical3;
-            }
-        }
-
-        /// <summary>
-        /// 查找L型匹配
-        /// L型定义：一个3连在水平/垂直方向，在其端点有另一个2连在垂直/水平方向
-        /// </summary>
-        private static List<MatchData> FindLShapeMatches(Board board)
-        {
-            var lShapeMatches = new List<MatchData>();
-
-            // 遍历每个位置，寻找可能的L型中心点
-            for (int x = 0; x < board.Width; x++)
-            {
-                for (int y = 0; y < board.Height; y++)
-                {
-                    Gem centerGem = board.GetGem(x, y);
-                    if (centerGem == null) continue;
-
-                    GemType gemType = centerGem.Type;
-
-                    // 检查4种L型配置：
-                    // 1. 水平右 + 垂直上 (┘)
-                    var lShape1 = CheckLShape(board, x, y, gemType, 1, 0, 0, 1);
-                    if (lShape1 != null) lShapeMatches.Add(lShape1);
-
-                    // 2. 水平右 + 垂直下 (┐)
-                    var lShape2 = CheckLShape(board, x, y, gemType, 1, 0, 0, -1);
-                    if (lShape2 != null) lShapeMatches.Add(lShape2);
-
-                    // 3. 水平左 + 垂直上 (└)
-                    var lShape3 = CheckLShape(board, x, y, gemType, -1, 0, 0, 1);
-                    if (lShape3 != null) lShapeMatches.Add(lShape3);
-
-                    // 4. 水平左 + 垂直下 (┌)
-                    var lShape4 = CheckLShape(board, x, y, gemType, -1, 0, 0, -1);
-                    if (lShape4 != null) lShapeMatches.Add(lShape4);
-                }
-            }
-
-            return lShapeMatches;
-        }
-
-        /// <summary>
-        /// 检查指定位置是否构成L型匹配
-        /// </summary>
-        private static MatchData CheckLShape(Board board, int x, int y, GemType gemType,
-            int dir1X, int dir1Y, int dir2X, int dir2Y)
-        {
-            var gems = new List<Gem>();
-            gems.Add(board.GetGem(x, y));
-
-            // 检查第一个方向（至少需要2个相同宝石）
-            int count1 = 1;
-            for (int i = 1; i < 3; i++)
-            {
-                int checkX = x + dir1X * i;
-                int checkY = y + dir1Y * i;
-                if (!board.IsValidPosition(checkX, checkY)) break;
-
-                Gem gem = board.GetGem(checkX, checkY);
-                if (gem == null || gem.Type != gemType) break;
-
-                gems.Add(gem);
-                count1++;
-            }
-
-            // 检查第二个方向（至少需要2个相同宝石）
-            int count2 = 1;
-            for (int i = 1; i < 3; i++)
-            {
-                int checkX = x + dir2X * i;
-                int checkY = y + dir2Y * i;
-                if (!board.IsValidPosition(checkX, checkY)) break;
-
-                Gem gem = board.GetGem(checkX, checkY);
-                if (gem == null || gem.Type != gemType) break;
-
-                gems.Add(gem);
-                count2++;
-            }
-
-            // L型需要至少3+2的配置
-            if ((count1 >= 3 && count2 >= 2) || (count1 >= 2 && count2 >= 3))
-            {
-                return new MatchData(gems, MatchType.LShape, gemType);
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// 查找T型和十字型匹配
-        /// T型：一个3连在一个方向，中间点有另一个2连在垂直方向
-        /// 十字型：水平和垂直都是3连，在中心点交叉
-        /// </summary>
-        private static List<MatchData> FindTShapeMatches(Board board)
-        {
-            var tShapeMatches = new List<MatchData>();
-
-            for (int x = 0; x < board.Width; x++)
-            {
-                for (int y = 0; y < board.Height; y++)
-                {
-                    Gem centerGem = board.GetGem(x, y);
-                    if (centerGem == null) continue;
-
-                    GemType gemType = centerGem.Type;
-
-                    // 检查十字型（水平3连 + 垂直3连）
-                    var crossMatch = CheckCrossShape(board, x, y, gemType);
-                    if (crossMatch != null)
-                    {
-                        tShapeMatches.Add(crossMatch);
-                        continue; // 十字型优先级最高，找到后跳过T型检查
-                    }
-
-                    // 检查T型（4种方向）
-                    var tMatch = CheckTShape(board, x, y, gemType);
-                    if (tMatch != null) tShapeMatches.Add(tMatch);
-                }
-            }
-
-            return tShapeMatches;
-        }
-
-        /// <summary>
-        /// 检查十字型匹配
-        /// </summary>
-        private static MatchData CheckCrossShape(Board board, int x, int y, GemType gemType)
-        {
-            // 检查水平方向
-            int horizCount = 1;
-            var horizGems = new List<Gem> { board.GetGem(x, y) };
-
-            // 向左
-            for (int i = 1; i <= 2; i++)
-            {
-                if (!board.IsValidPosition(x - i, y)) break;
-                Gem gem = board.GetGem(x - i, y);
-                if (gem == null || gem.Type != gemType) break;
-                horizGems.Add(gem);
-                horizCount++;
-            }
-
-            // 向右
-            for (int i = 1; i <= 2; i++)
-            {
-                if (!board.IsValidPosition(x + i, y)) break;
-                Gem gem = board.GetGem(x + i, y);
-                if (gem == null || gem.Type != gemType) break;
-                horizGems.Add(gem);
-                horizCount++;
-            }
-
-            // 检查垂直方向
-            int vertCount = 1;
-            var vertGems = new List<Gem> { board.GetGem(x, y) };
-
-            // 向下
-            for (int i = 1; i <= 2; i++)
-            {
-                if (!board.IsValidPosition(x, y - i)) break;
-                Gem gem = board.GetGem(x, y - i);
-                if (gem == null || gem.Type != gemType) break;
-                vertGems.Add(gem);
-                vertCount++;
-            }
-
-            // 向上
-            for (int i = 1; i <= 2; i++)
-            {
-                if (!board.IsValidPosition(x, y + i)) break;
-                Gem gem = board.GetGem(x, y + i);
-                if (gem == null || gem.Type != gemType) break;
-                vertGems.Add(gem);
-                vertCount++;
-            }
-
-            // 十字型：水平和垂直都至少3连
-            if (horizCount >= 3 && vertCount >= 3)
-            {
-                // 合并所有宝石（去重中心点）
-                var allGems = new HashSet<Gem>(horizGems);
-                foreach (var gem in vertGems)
-                {
-                    allGems.Add(gem);
-                }
-
-                return new MatchData(allGems.ToList(), MatchType.Cross, gemType);
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// 检查T型匹配
-        /// </summary>
-        private static MatchData CheckTShape(Board board, int x, int y, GemType gemType)
-        {
-            // T型需要一条主线（3连）和一条支线（2连）
-
-            // 检查水平主线 + 垂直支线
-            var horizLine = CheckDirection(board, x - 1, y, 1, 0);
-            if (horizLine.Count >= 3 && horizLine.Contains(board.GetGem(x, y)))
-            {
-                var vertBranch = CheckVerticalBranch(board, x, y, gemType);
-                if (vertBranch >= 2)
-                {
-                    var allGems = new HashSet<Gem>(horizLine);
-
-                    // 添加垂直支线
-                    for (int i = 1; i < vertBranch; i++)
-                    {
-                        if (board.IsValidPosition(x, y + i))
-                        {
-                            var gem = board.GetGem(x, y + i);
-                            if (gem != null && gem.Type == gemType) allGems.Add(gem);
-                        }
-                        if (board.IsValidPosition(x, y - i))
-                        {
-                            var gem = board.GetGem(x, y - i);
-                            if (gem != null && gem.Type == gemType) allGems.Add(gem);
-                        }
-                    }
-
-                    return new MatchData(allGems.ToList(), MatchType.TShape, gemType);
-                }
-            }
-
-            // 检查垂直主线 + 水平支线
-            var vertLine = CheckDirection(board, x, y - 1, 0, 1);
-            if (vertLine.Count >= 3 && vertLine.Contains(board.GetGem(x, y)))
-            {
-                var horizBranch = CheckHorizontalBranch(board, x, y, gemType);
-                if (horizBranch >= 2)
-                {
-                    var allGems = new HashSet<Gem>(vertLine);
-
-                    // 添加水平支线
-                    for (int i = 1; i < horizBranch; i++)
-                    {
-                        if (board.IsValidPosition(x + i, y))
-                        {
-                            var gem = board.GetGem(x + i, y);
-                            if (gem != null && gem.Type == gemType) allGems.Add(gem);
-                        }
-                        if (board.IsValidPosition(x - i, y))
-                        {
-                            var gem = board.GetGem(x - i, y);
-                            if (gem != null && gem.Type == gemType) allGems.Add(gem);
-                        }
-                    }
-
-                    return new MatchData(allGems.ToList(), MatchType.TShape, gemType);
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// 检查垂直支线长度
-        /// </summary>
-        private static int CheckVerticalBranch(Board board, int x, int y, GemType gemType)
-        {
-            int count = 1; // 中心点
-
-            // 向上
-            for (int i = 1; i <= 2; i++)
-            {
-                if (!board.IsValidPosition(x, y + i)) break;
-                Gem gem = board.GetGem(x, y + i);
-                if (gem == null || gem.Type != gemType) break;
-                count++;
-            }
-
-            // 向下
-            for (int i = 1; i <= 2; i++)
-            {
-                if (!board.IsValidPosition(x, y - i)) break;
-                Gem gem = board.GetGem(x, y - i);
-                if (gem == null || gem.Type != gemType) break;
-                count++;
-            }
-
-            return count;
-        }
-
-        /// <summary>
-        /// 检查水平支线长度
-        /// </summary>
-        private static int CheckHorizontalBranch(Board board, int x, int y, GemType gemType)
-        {
-            int count = 1; // 中心点
-
-            // 向右
-            for (int i = 1; i <= 2; i++)
-            {
-                if (!board.IsValidPosition(x + i, y)) break;
-                Gem gem = board.GetGem(x + i, y);
-                if (gem == null || gem.Type != gemType) break;
-                count++;
-            }
-
-            // 向左
-            for (int i = 1; i <= 2; i++)
-            {
-                if (!board.IsValidPosition(x - i, y)) break;
-                Gem gem = board.GetGem(x - i, y);
-                if (gem == null || gem.Type != gemType) break;
-                count++;
-            }
-
-            return count;
-        }
-
-        /// <summary>
-        /// 移除重复的MatchData（优先保留高优先级匹配）
-        /// </summary>
-        private static List<MatchData> RemoveDuplicateMatchData(List<MatchData> matches)
-        {
-            if (matches.Count == 0) return matches;
-
-            var uniqueMatches = new List<MatchData>();
-            var usedGems = new HashSet<Gem>();
-
-            // 按优先级排序
-            var sortedMatches = matches.OrderByDescending(m => m.Priority).ToList();
-
-            foreach (var match in sortedMatches)
-            {
-                // 检查是否有重复宝石
-                bool hasUsedGem = match.Gems.Any(gem => usedGems.Contains(gem));
-
-                if (!hasUsedGem)
-                {
-                    uniqueMatches.Add(match);
-                    foreach (var gem in match.Gems)
-                    {
-                        usedGems.Add(gem);
-                    }
-                }
-            }
-
-            return uniqueMatches;
         }
 
         /// <summary>
